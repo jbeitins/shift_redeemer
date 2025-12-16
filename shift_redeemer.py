@@ -3,6 +3,7 @@ import requests, pickle, os, logging, getpass, re
 from bs4 import BeautifulSoup as bs
 
 # Config
+DRY_RUN = False
 CONFIG = ".config/shift_redeemer"
 PLATFORM = 'steam'
 URLS = [
@@ -152,6 +153,10 @@ class Redeemer:
 
 	def redeem_code(self, code):
 		code = code.strip()
+		
+		if DRY_RUN:
+			self._save_to_history(code) # Save invalid codes too so we don't retry them
+			return
 		
 		# 1. Skip if already processed
 		if code in self.redeemed_history:
