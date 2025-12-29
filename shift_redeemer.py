@@ -7,8 +7,8 @@ DRY_RUN = False
 CONFIG = ".config/shift_redeemer"
 PLATFORM = 'steam'
 URLS = [
-	'https://raw.githubusercontent.com/ugoogalizer/autoshift-codes/main/shiftcodes.json',
-	# 'https://mentalmars.com/game-news/borderlands-4-shift-codes/',
+	'https://www.ign.com/wikis/borderlands-4/Borderlands_4_SHiFT_Codes',
+	'https://mentalmars.com/game-news/borderlands-4-shift-codes/',
 	]
 
 os.makedirs(CONFIG, exist_ok=True)
@@ -103,7 +103,7 @@ class Redeemer:
 		email = input("E-mail: ")
 		password = getpass.getpass("Password: ")
 		
-		log.info(f"Logging in as {email}...")
+		print(f"Logging in as {email}...")
 		response = self.session.get(f"{self.base_url}/home")
 		token = self._extract_csrf_token(response.text)
 		
@@ -121,12 +121,12 @@ class Redeemer:
 		response = self.session.post(f"{self.base_url}/sessions", data=payload)
 
 		if response.status_code == 200 and "Sign Out" in response.text:
-			log.info("Login successful!")
+			print("Login successful!")
 			self._extract_csrf_token(response.text)
 			self._save_session()
 			return True
 		else:
-			log.error("Login failed")
+			print("Login failed")
 			return False
 		
 	def fetch_codes(self):
@@ -136,31 +136,26 @@ class Redeemer:
 		for url in URLS:
 			try:
 				response = self.session.get(url, timeout=10)
-				try: 
-					response = response.json()[0]['codes']
-					codes = [item['code'] for item in response if item.get('game') == 'Borderlands 4']
-				except: 
-					soup = bs(response.content, 'html.parser')
-					for table in soup.find_all('table'):
-						table_text = table.get_text(separator=" ").upper()
-						found = pattern.findall(table_text)
-						codes.update(found)
+				soup = bs(response.content, 'html.parser')
+				for table in soup.find('table'):
+					table_text = table.get_text(separator=" ").upper()
+					found = pattern.findall(table_text)
+					codes.update(found)
 			except Exception as e:
 				log.error(f"Failed to fetch codes: {e}")
 				return []
-
 		return list(codes)
 
 	def redeem_code(self, code):
 		code = code.strip()
 		
 		if DRY_RUN:
-			self._save_to_history(code) # Save invalid codes too so we don't retry them
+			self._save_to_history(code)
 			return
 		
 		# 1. Skip if already processed
 		if code in self.redeemed_history:
-			return # Silent skip
+			return
 
 		log.info(f"Attempting to redeem: {code}")
 		
@@ -182,52 +177,42 @@ class Redeemer:
 			log.error(f"Network error: {e}")
 			return
 
-		if "does not exist" in response.text or "expired" in response.text:
-			log.error(response.text.strip())
-			self._save_to_history(code) # Save invalid codes too so we don't retry them
-			return
-
 		soup = bs(response.text, 'html.parser')
 
-		# 3. Find Steam form
+		# 3. Find form
 		forms = soup.find_all('form')
-		steam_form = None
+		form = None
 		for form in forms:
-			if PLATFORM in form.get('action', '').lower() or \
-				form.find('input', {'value': PLATFORM}) or \
-				PLATFORM in str(form).lower():
-				steam_form = form
+			if PLATFORM.lower() in str(form).lower():
+				form = form
 				break
 		
-		if not steam_form:
-			log.error(f"No Steam option found")
+		if not form:
+			log.error(response.text.strip("{}") or "Code validation failed")
 			return
 
 		# 4. Submit Redemption
-		redemption_url = steam_form.get('action')
-		if not redemption_url.startswith('http'):
-			redemption_url = self.base_url + redemption_url
+		redemption_url = form.get('action')
+		if not redemption_url.startswith('http'): redemption_url = self.base_url + redemption_url
 
 		data = {}
-		for input_tag in steam_form.find_all('input'):
-			if input_tag.get('name'):
-				data[input_tag['name']] = input_tag.get('value', '')
+		for input_tag in form.find_all('input'):
+			if input_tag.get('name'): data[input_tag['name']] = input_tag.get('value', '')
 
 		try:
-			redeem_response = self.session.post(redemption_url, data=data, headers=ajax_headers).json()
-			message = redeem_response.get('text', '')
+			redeem_response = self.session.post(redemption_url, data=data, headers=ajax_headers)
+			
+			try: message = redeem_response.json().get('text', '') 
+			except: message = bs(redeem_response.text, 'html.parser').find('div', class_='alert').get_text().strip()
 
-			if "successfully redeemed" in message:
+			if 'redeemed' in message:
 				log.info(f"{message}")
 				self._save_to_history(code)
-			elif "already been redeemed" in message:
-				log.warning(f"{message}")
-				self._save_to_history(code)
 			else:
-				log.error(f"{message}")
+				log.warning(f"{message}")
 				
 		except Exception as e:
-			log.error(f"Error parsing response: {e}")
+			log.error(f"Error parsing response")
 
 if __name__ == "__main__":
 	redeemer = Redeemer()
